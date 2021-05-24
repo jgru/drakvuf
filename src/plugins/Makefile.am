@@ -298,6 +298,12 @@ sources += ipt/ipt.cpp
 sources += ipt/ipt.h
 endif
 
+if PLUGIN_HIDSIM
+sources += hidsim/hidsim.cpp
+sources += hidsim/hidsim.h
+sources += hidsim/private.h
+endif
+
 ###############################################################################
 sources += plugins.cpp plugins.h plugins_ex.cpp plugins_ex.h plugin_utils.cpp plugin_utils.h private.h type_traits_helpers.h filesystem.hpp hook_helpers.h
 sources += output_format.h output_format/common.h output_format/csvfmt.h output_format/deffmt.h output_format/jsonfmt.h output_format/kvfmt.h

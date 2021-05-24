@@ -1,0 +1,18 @@
+#include <stdio.h>
+#include "hidsim.h"
+#include "plugins/output_format.h"
+#include "private.h"
+
+hidsim::hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output)
+  : pluginex(drakvuf, output)
+{
+  this->format = output;
+  this->config_fp = config->config_fp;
+  PRINT_DEBUG("[HIDSIM] Hello world.\n");
+  return;
+}
+
+hidsim::~hidsim()
+{
+  ;
+}

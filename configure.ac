@@ -448,6 +448,15 @@ if test x$plugin_ipt = xyes; then
   AC_DEFINE_UNQUOTED(ENABLE_PLUGIN_IPT, 1, "")
 fi
 
+AC_ARG_ENABLE([plugin_hidsim],
+  [AS_HELP_STRING([--disable-plugin-hidsim],
+    [Enable the HIDSIM plugin @<:@yes@:>@])],
+  [plugin_hisim="$enableval"],
+  [plugin_hidsim="yes"])   
+AM_CONDITIONAL([PLUGIN_HIDSIM], [test x$plugin_hidsim = xyes])
+if test x$plugin_hidsim = xyes; then
+  AC_DEFINE_UNQUOTED(ENABLE_PLUGIN_HIDSIM, 1, "")
+fi
 #####################################################
 
 AC_ARG_ENABLE([repl],
@@ -735,6 +744,7 @@ Codemon:      $plugin_codemon
 Exploitmon:   $plugin_exploitmon
 LibHookTest:  $plugin_libhooktest
 IPT:          $plugin_ipt
+HidSim:	      $plugin_hidsim
 -------------------------------------------------------------------------------
 Deprecated Plugins
 WMIMon:       $plugin_wmimon
