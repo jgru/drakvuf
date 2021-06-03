@@ -298,6 +298,11 @@ sources += ipt/ipt.cpp
 sources += ipt/ipt.h
 endif
 
+if PLUGIN_HIDSIM
+sources += hidsim/hidsim.cpp
+sources += hidsim/hidsim.h
+endif
+
 ###############################################################################
 sources += plugins.cpp plugins.h plugins_ex.cpp plugins_ex.h plugin_utils.cpp plugin_utils.h private.h type_traits_helpers.h filesystem.hpp hook_helpers.h
 sources += output_format.h output_format/common.h output_format/csvfmt.h output_format/deffmt.h output_format/jsonfmt.h output_format/kvfmt.h
@@ -308,12 +313,17 @@ AM_CPPFLAGS += $(CPPFLAGS)
 AM_CPPFLAGS += $(VMI_CFLAGS)
 AM_CPPFLAGS += $(GLIB_CFLAGS)
 AM_CPPFLAGS += $(JSONC_CFLAGS)
+AM_CPPFLAGS += $(PTHREAD_CFLAGS)
 
 AM_LDFLAGS =  $(LDFLAGS)
 AM_LDFLAGS += $(GLIB_LIBS)
 AM_LDFLAGS += $(VMI_LIBS)
 AM_LDFLAGS += $(JSONC_LIBS)
 AM_LDFLAGS += $(STDCPPFSLIB)
+
+# use PTHREAD_CFLAGS for the linker, too; $(PTHREAD_LIBS) not working 
+# https://lists.gnu.org/archive/html/autoconf-archive-maintainers/2013-06/msg00021.html
+AM_LDFLAGS += $(PTHREAD_CFLAGS) 
 
 AM_CXXFLAGS = $(CXXFLAGS)
 
