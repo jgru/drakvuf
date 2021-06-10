@@ -123,17 +123,20 @@ struct dimensions
     float dx;       // one pixel equivalent on x-axis
     float dy;       // one pixel equivalent on y-axis
 };
+
 class hidsim : public plugin
 {
 
 public:
-    void hid_injector(drakvuf_t drakvuf);
+    void hid_injector_from_file(drakvuf_t drakvuf);
+    void hid_injector_random(drakvuf_t);
     bool stop() override;
     hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output);
     ~hidsim();
 
 private:
     qmp_connection qc;
+    char sock_path[0x100];
     std::thread* t;
     bool is_stopping = false;
 
@@ -150,6 +153,7 @@ private:
 
     int dump_screen(const char* path);
     int get_display_dimensions(struct dimensions* dims);
+    int reset_injection(FILE* f, timeval* tv, int* ox, int* oy, int* nx, int* ny);
     void center_cursor();
 };
 
