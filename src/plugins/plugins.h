@@ -161,6 +161,7 @@ struct plugins_options
     const char* ipt_dir;                // PLUGIN_IPT
     bool ipt_trace_os;                  // PLUGIN_IPT
     bool ipt_trace_user;                // PLUGIN_IPT
+    const char* hidsim_template;        // PLUGIN_HIDSIM
 };
 
 typedef enum drakvuf_plugin
@@ -266,7 +267,7 @@ static const bool drakvuf_plugin_os_support[__DRAKVUF_PLUGIN_LIST_MAX][VMI_OS_WI
     [PLUGIN_LIBHOOKTEST]  = { [VMI_OS_WINDOWS] = 1, [VMI_OS_LINUX] = 1 },
     [PLUGIN_EXPLOITMON]   = { [VMI_OS_WINDOWS] = 1, [VMI_OS_LINUX] = 0 },
     [PLUGIN_IPT]          = { [VMI_OS_WINDOWS] = 1, [VMI_OS_LINUX] = 1 },
-    [PLUGIN_HIDSIM]       = { [VMI_OS_WINDOWS] = 1, [VMI_OS_LINUX] = 0 },
+    [PLUGIN_HIDSIM]       = { [VMI_OS_WINDOWS] = 1, [VMI_OS_LINUX] = 1 },
 };
 
 class plugin

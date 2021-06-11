@@ -315,6 +315,10 @@ static void print_usage()
         "\t --ipt-trace-user\n"
         "\t                           Enable IPT tracing in ring > 0\n"
 #endif
+#ifdef ENABLE_PLUGIN_HIDSIM
+        "\t --hid-template <path to template>\n"
+        "\t                           The template specifying the HID events to simulate\n"
+#endif
         "\t -h, --help                Show this help\n"
     );
 }
@@ -409,6 +413,7 @@ int main(int argc, char** argv)
         opt_ipt_dir,
         opt_ipt_trace_os,
         opt_ipt_trace_user,
+        opt_hidsim_template,
     };
     const option long_opts[] =
     {
@@ -462,6 +467,7 @@ int main(int argc, char** argv)
         {"ipt-dir", required_argument, NULL, opt_ipt_dir},
         {"ipt-trace-os", no_argument, NULL, opt_ipt_trace_os},
         {"ipt-trace-user", no_argument, NULL, opt_ipt_trace_user},
+        {"hid-template", required_argument, NULL, opt_hidsim_template},
         {NULL, 0, NULL, 0}
     };
     const char* opts = "r:d:i:I:e:m:t:D:o:vx:a:f:spT:S:Mc:nblgj:k:w:W:hF:C";
@@ -732,6 +738,12 @@ int main(int argc, char** argv)
                 options.exploitmon_kernel2user_detect = true;
                 break;
 #endif
+#ifdef ENABLE_PLUGIN_HIDSIM
+            case opt_hidsim_template:
+                options.hidsim_template = optarg;
+                break;
+#endif
+
             case 'h':
                 print_usage();
                 return drakvuf_exit_code_t::SUCCESS;
