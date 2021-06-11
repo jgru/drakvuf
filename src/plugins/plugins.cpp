@@ -434,7 +434,7 @@ int drakvuf_plugins::start(const drakvuf_plugin_t plugin_id,
                 {
                     struct hidsim_config config =
                     {
-                        .config_fp = "hidsim_profile.json"
+                        .template_fp = options->hidsim_template,
                     };  
                     this->plugins[plugin_id] = std::make_unique<hidsim>(this->drakvuf, &config, this->output);
                     break;

@@ -111,9 +111,10 @@
 #include "../plugins.h"
 #include "qmp_connection.h"
 
+#define SOCK_STUB "/run/xen/qmp-libxl-"
 struct hidsim_config
 {
-    const char* config_fp;
+    const char* template_fp;
 };
 
 struct dimensions
@@ -129,17 +130,20 @@ class hidsim : public plugin
 
 public:
     void hid_injector_from_file(drakvuf_t drakvuf);
+    void hid_injector_from_float_file(drakvuf_t drakvuf);
+    void hid_injector_from_abs_file(drakvuf_t drakvuf);
     void hid_injector_random(drakvuf_t);
+    void construct_sock_path(drakvuf_t drakvuf);
     bool stop() override;
     hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output);
     ~hidsim();
 
 private:
     qmp_connection qc;
-    char sock_path[0x100];
+    char* sock_path;
+    char* template_path; 
     std::thread* t;
     bool is_stopping = false;
-
     int interval = 500;
 
     struct dimensions dim =
@@ -153,7 +157,7 @@ private:
 
     int dump_screen(const char* path);
     int get_display_dimensions(struct dimensions* dims);
-    int reset_injection(FILE* f, timeval* tv, int* ox, int* oy, int* nx, int* ny);
+    int reset_hid_injection(FILE* f, timeval* tv, int* nx, int* ny);
     void center_cursor();
 };
 
