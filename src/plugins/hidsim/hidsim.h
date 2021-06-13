@@ -105,13 +105,14 @@
 #ifndef HIDSIM_H
 #define HIDSIM_H
 
-#include <string>
-#include <thread>
+#include <string.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include "../plugins.h"
 #include "qmp_connection.h"
 
 #define SOCK_STUB "/run/xen/qmp-libxl-"
+
 struct hidsim_config
 {
     const char* template_fp;
@@ -129,36 +130,17 @@ class hidsim : public plugin
 {
 
 public:
-    void hid_injector_from_file(drakvuf_t drakvuf);
-    void hid_injector_from_float_file(drakvuf_t drakvuf);
-    void hid_injector_from_abs_file(drakvuf_t drakvuf);
-    void hid_injector_random(drakvuf_t);
-    void construct_sock_path(drakvuf_t drakvuf);
+   // static bool is_stopping;
+    void start();
     bool stop() override;
     hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output);
     ~hidsim();
 
 private:
-    qmp_connection qc;
+    qmp_connection* qc;
+    pthread_t* t;  
     char* sock_path;
     char* template_path; 
-    std::thread* t;
-    bool is_stopping = false;
-    int interval = 500;
-
-    struct dimensions dim =
-    {
-        .width = 800,
-        .dx = (float)(1<<15)/800,    // 0 == 0 px, 32768 == width px
-        .height = 600,
-        .dy = (float)(1<<15)/600,   // 0 == 0 px, 32768 == height px
-
-    };
-
-    int dump_screen(const char* path);
-    int get_display_dimensions(struct dimensions* dims);
-    int reset_hid_injection(FILE* f, timeval* tv, int* nx, int* ny);
-    void center_cursor();
 };
 
 #endif

@@ -119,9 +119,11 @@
 #include "hidsim.h"
 
 #define CMD_BUF_LEN 0x400
-#define HEADER_LEN 0xC
 
-int hidsim::dump_screen(const char* path)
+/* Stop condition */
+static volatile sig_atomic_t sis_stopping = 0;
+
+int dump_screen(qmp_connection* qc, const char* path)
 {
     char cmd[0x200];
     snprintf(cmd, 0x200,
@@ -129,7 +131,7 @@ int hidsim::dump_screen(const char* path)
         path);
     char* out = NULL;
 
-    this->qc.communicate((const char*) cmd, &out);
+    qmp_communicate(qc, (const char*) cmd, &out);
 
     if (strcmp(out, QMP_SUCCESS) != 0)
     {
@@ -144,12 +146,12 @@ float calculate_pixel_unit(int u)
     return (float)(1<<15)/u;
 }
 
-int hidsim::get_display_dimensions(struct dimensions* dims)
+int get_display_dimensions(qmp_connection* qc, struct dimensions* dims)
 {
     const char* tmp_path = "/tmp/tmp.ppm";
 
     /* Dumps screen via QMP-command and stores result at tmp_path */
-    if (dump_screen(tmp_path) != 0)
+    if (dump_screen(qc, tmp_path) != 0)
         return -1;
 
     /* Extracts display size from .ppm-file created by screendump */
@@ -194,140 +196,106 @@ void construct_button_command(char* buf, int len, const char* btn , int is_down)
 void construct_move_mouse_command(char* buf, int len, int x, int y, bool is_rel)
 {
     const char* type = is_rel ? "rel" : "abs";
-    snprintf(buf, len, "{\"execute\": \"input-send-event\" , \"arguments\":    \
-    {\"events\": [{\"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": %d \
+    snprintf(buf, len, "{\"execute\": \"input-send-event\" , \"arguments\":    \                                                                                                                                                                             
+    {\"events\": [{\"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": %d \                                                                                                                                                                            
     }}, {\"type\": \"%s\", \"data\": { \"axis\": \"y\", \"value\": %d }}]}}",
         type, x, type, y);
 }
 
 /* Helper to center cursor */
-void hidsim::center_cursor()
+void center_cursor(qmp_connection* qc)
 {
     /* Command buffer */
     char buf[CMD_BUF_LEN];
 
     /* 2^15 == max, 2^14 == max/2 */
     construct_move_mouse_command(buf, CMD_BUF_LEN, 1<<14, 1<<14, false);
-    this->qc.communicate(buf, NULL);
+    qmp_communicate(qc, buf, NULL);
 }
 
-void hidsim::hid_injector_random(drakvuf_t){
-    /* Converts interval to usecs */
-    int uinterval = this->interval * 1000;
-    /* Declares points in time */
-    gint64 t1, t2;
-    /* Command buffer */
-    char buf[CMD_BUF_LEN];
-
-    this->center_cursor();
-    t1 = g_get_monotonic_time();
-
-    /* Used for inverting mouse movement */
-    int sign = 0x1;
+/* Infers socket path from drakvuf's actual domID */
+char* construct_sock_path(drakvuf_t drakvuf){
     
-    /* Loops, until stopped */
-    while (!this->is_stopping)
-    {
-        t2 = g_get_monotonic_time();
-
-        int elapsed = t2 - t1;
-
-        if (elapsed > uinterval)
-        {
-            construct_move_mouse_command(buf, CMD_BUF_LEN, (int)((1<<14) + (128 * this->dim.dx * sign)),
-                (int)((1<<14) + (128 * this->dim.dx * sign)), false);
-            this->qc.communicate(buf, NULL);
-            sign = ~sign + 1;
-            t1 = g_get_monotonic_time();
-        }
-        else
-        {
-            // Sleeps waiting interval is over
-            usleep((uinterval - elapsed));
-        }
-    }
-
-}
-
-int hidsim::reset_hid_injection(FILE* f, timeval* tv, int* nx, int* ny){
-    /* Jumps to the beginning of the HID data */
-    int ret = fseek(f, HEADER_LEN, SEEK_SET);
+    /* Retrieves domid as string */
+    char domid[0x20];
+    sprintf(domid, "%d", drakvuf_get_dom_id(drakvuf));    
     
-    /* Center coords */
-    *nx = 1 << 14;
-    *ny = 1 << 14;
-    this->center_cursor();
-
-    timerclear(tv);
-
-    return ret; 
+    /* Constructs filepath to QMP Unix domain socket */
+    char *sock_path = (char*) malloc(sizeof(char) * (strlen(SOCK_STUB) + strlen(domid)));
+    strcpy(sock_path, SOCK_STUB);
+    strcpy(sock_path + strlen(SOCK_STUB), domid);
+    return sock_path;
 }
+
 int read_header(FILE* f){
-    int bytes_read; 
+    int bytes_read;
     uint32_t magic = 0x00000000;
     uint32_t drak = 0x00000000;
     uint32_t version = 0x00000000;
     bytes_read = fread(&magic, sizeof(magic), 1, f);
     bytes_read = fread(&drak, sizeof(drak), 1, f);
     bytes_read = fread(&version, sizeof(version), 1, f);
-    PRINT_DEBUG("[HIDSIM]Read header bytes %x %x %x\n", magic, drak, version);
+    
+    PRINT_DEBUG("[HIDSIM] Read header bytes %x %x %x\n", magic, drak, version);
+    
     return 0;
 }
-void hidsim::hid_injector_from_file(drakvuf_t drakvuf)
-{
-    PRINT_DEBUG("[HIDSIM] Starting HID simulation thread\n");
-    FILE *f = fopen(this->template_path,"rb");
-    
-    if (!f) {
-        fprintf(stderr, "Error reading from %s\n", this->template_path); 
-        return;
-    }
 
-    if(read_header(f) != 0){
-        fprintf(stderr, "Not a valid HID template file. Stopping");    
-        return; 
-    }
-     
+int reset_hid_injection(qmp_connection* qc, FILE* f, timeval* tv, int* nx, int* ny){
+    /* Jumps to the beginning of the HID data */
+    int ret = fseek(f, HEADER_LEN, SEEK_SET);
 
+    /* Center coords */
+    *nx = 1 << 14;
+    *ny = 1 << 14;
+    center_cursor(qc);
+
+    timerclear(tv);
+
+    return ret;
+}
+
+int run_injection(qmp_connection* qc, dimensions* dim, FILE* f){
     /* Command buffer */
     char buf[CMD_BUF_LEN];
-    input_event ie; 
+    input_event ie;
 
     size_t bytes_read = 0;
-    int new_x, new_y = 0; 
+    int new_x, new_y = 0;
 
     struct timeval tv_old;
     struct timeval tv_diff;
     struct timeval tv_curr;
     struct timeval tv_last_qmp;
     struct timeval tv_last_qmp_diff;
-    bool is_wait = false; 
+    bool is_wait = false;
 
     while (!this->is_stopping)
     {
         if (bytes_read == 0)
-        {   
+        {
             /* Prepares injection by initializing all variables */
-            if(reset_hid_injection(f, &tv_old, &new_x, &new_y) != 0)
+            if(reset_hid_injection(qc, f, &tv_old, &new_x, &new_y) != 0)
                 fprintf(stderr, "[HIDSIM] Error resetting HID injection");
+
         }
 
         bytes_read = fread(&ie, sizeof(ie), 1, f);
-        
+
         /* Handles move events */
         if (ie.type == EV_REL){
-            //PRINT_DEBUG("[HIDSIM] EV_REL\n");
+            //PRINT_DEBUG("[HIDSIM] EV_REL\n");                                                                                                                                                                                                              
             if (ie.code == REL_X)
-            {   
+            {
                 new_x += ie.value;
-                //PRINT_DEBUG("[HIDSIM] X %d\n", new_x);
+                //PRINT_DEBUG("[HIDSIM] X %d\n", new_x);                                                                                                                                                                                                     
             }
             if (ie.code == REL_Y)
             {
-                new_y += ie.value; 
-                //PRINT_DEBUG("[HIDSIM] Y %d \n", new_y);
-                //construct_move_mouse_command(buf, CMD_BUF_LEN, old_x,
-                //new_y, false);
+                new_y += ie.value;
+                //PRINT_DEBUG("[HIDSIM] Y %d \n", new_y);                                                                                                                                                                                                    
+                //construct_move_mouse_command(buf, CMD_BUF_LEN, old_x,                                                                                                                                                                                      
+                //new_y, false);                                                                                                                                                                                                                             
             }
         }
 
@@ -343,259 +311,102 @@ void hidsim::hid_injector_from_file(drakvuf_t drakvuf)
                 construct_button_command(buf, CMD_BUF_LEN, "right", ie.value);
 
             }
-            //PRINT_DEBUG("[HIDSIM] %s \n", buf);
-            this->qc.communicate(buf, NULL);
+            //PRINT_DEBUG("[HIDSIM] %s \n", buf);                                                                                                                                                                                                            
+            qmp_communicate(qc, buf, NULL);
             gettimeofday(&tv_last_qmp, NULL);
         }
 
         timersub(&ie.time, &tv_old, &tv_diff);
 
-        //PRINT_DEBUG("[HIDSIM] Sleeping %ld.%ld secs \n", tv_diff.tv_sec, tv_diff.tv_usec);
+        //PRINT_DEBUG("[HIDSIM] Sleeping %ld.%ld secs \n", tv_diff.tv_sec, tv_diff.tv_usec);                                                                                                                                                                 
 
         if (tv_diff.tv_sec > 0)
         {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld secs \n", tv_diff.tv_sec);
+            //PRINT_DEBUG("[HIDSIM] Sleeping %ld secs \n", tv_diff.tv_sec);                                                                                                                                                                                  
             sleep(tv_diff.tv_sec);
             is_wait = true;
         }
-        
+
         if (tv_diff.tv_usec > 0)
         {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld usecs\n", tv_diff.tv_usec);
+            //PRINT_DEBUG("[HIDSIM] Sleeping %ld usecs\n", tv_diff.tv_usec);                                                                                                                                                                                 
             usleep(tv_diff.tv_usec);
             is_wait = true;
         }
 
-        gettimeofday(&tv_curr, NULL); 
+        gettimeofday(&tv_curr, NULL);
         timersub(&tv_curr, &tv_last_qmp, &tv_last_qmp_diff);
 
-        /* Throttles the sending of QMP commands */ 
+        /* Throttles the sending of QMP commands */
         if (is_wait && tv_last_qmp_diff.tv_usec > 5000){
-            //PRINT_DEBUG("[HIDSIM] %s \n", buf);
+            //PRINT_DEBUG("[HIDSIM] %s \n", buf);                                                                                                                                                                                                            
             construct_move_mouse_command(buf, CMD_BUF_LEN, new_x, new_y, false);
-            this->qc.communicate(buf, NULL);
+            qmp_communicate(qc, buf, NULL);
             gettimeofday(&tv_last_qmp, NULL);
-            is_wait = false; 
+            is_wait = false;
         }
 
         tv_old.tv_sec = ie.time.tv_sec;
         tv_old.tv_usec = ie.time.tv_usec;
     }
+
+    return 0; 
 }
+/* this function is run by the second thread */
+void *inject_from_file(void* p)
+{   
+    PRINT_DEBUG("[HIDSIM] Starting thread\n");
 
-void hidsim::hid_injector_from_abs_file(drakvuf_t drakvuf)
-{
-    PRINT_DEBUG("[HIDSIM] Starting HID simulation thread\n");
+    /* Passed parameters */
+    char ** paths = (char**) p; 
+    char * sock_path = paths[0];
+    char * template_path = paths[1];
 
-    struct timeval tv;
-    int16_t x;
-    int16_t y;
-    uint8_t btn; 
+    /* Initializes qmp connection */
+    qmp_connection qc; 
 
-    //Input to read from
-    FILE *f;
-    f = fopen("/usr/local/src/out_abs_1","rb");
-    
-    if (!f) {
-        fprintf(stderr, "Error reading from %s\n", "/usr/local/src/output.bin"); 
-        return;
-    }
+    int ret = qmp_init_conn(&qc, sock_path);
 
-    /* Command buffer */
-    char buf[CMD_BUF_LEN];
-    
-    size_t bytes_read = 0;
-    int new_x, new_y = 0; 
+    PRINT_DEBUG("[HIDSIM] Connecting to %s\n", sock_path);
 
-    struct timeval tv_old;
-    struct timeval tv_diff;
-    
-    
-    //reset_injection(f, &tv_old, &old_x, &old_y, &new_x, &new_y);
-    bool is_wait = false; 
-    while (!this->is_stopping)
+    if (ret < 0)
     {
-        if (bytes_read == 0)
-        {   
-            /* Prepares injection by initializing all variables */
-            if(reset_hid_injection(f, &tv_old, &new_x, &new_y) != 0)
-                fprintf(stderr, "[HIDSIM] Error reading template file");
-        }
-        bytes_read = fread(&tv, sizeof(tv), 1, f);
-        bytes_read = fread(&x, sizeof(x), 1, f);
-        bytes_read = fread(&y, sizeof(y), 1, f);
-        bytes_read = fread(&btn, sizeof(btn), 1, f);
-
-        if(btn == 0x1){
-            construct_button_command(buf, CMD_BUF_LEN, "left", true);
-            this->qc.communicate(buf, NULL);
-            PRINT_DEBUG("[HIDSIM] %s \n", buf);
-
-        }
-        if(btn == 0x10){
-            construct_button_command(buf, CMD_BUF_LEN, "left", false);
-            this->qc.communicate(buf, NULL);
-            PRINT_DEBUG("[HIDSIM] %s \n", buf);
-        }
-
-        timersub(&tv, &tv_old, &tv_diff);
-
-        //PRINT_DEBUG("[HIDSIM] Sleeping %ld.%ld secs \n", tv_diff.tv_sec, tv_diff.tv_usec);
-
-        if (tv_diff.tv_sec > 0)
-        {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld secs \n", tv_diff.tv_sec);
-            sleep(tv_diff.tv_sec);
-            is_wait = true;
-        }
-        
-        if (tv_diff.tv_usec > 0)
-        {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld usecs\n", tv_diff.tv_usec);
-            usleep(tv_diff.tv_usec);
-            is_wait = true;
-        }
-
-        if (is_wait){
-            //PRINT_DEBUG("[HIDSIM] %s \n", buf);
-            construct_move_mouse_command(buf, CMD_BUF_LEN, x, y, false);
-            this->qc.communicate(buf, NULL);
-            is_wait = false; 
-        }
-
-        tv_old.tv_sec = tv.tv_sec;
-        tv_old.tv_usec = tv.tv_usec;
+        fprintf(stderr, "[HIDSIM] Could not connect to Unix Domain Socket %s.\n", sock_path);
+        return NULL;
     }
-}
+    dimensions dim; 
 
-void hidsim::hid_injector_from_float_file(drakvuf_t drakvuf)
-{
-    PRINT_DEBUG("[HIDSIM] Starting HID simulation thread\n");
-
-    struct timeval tv;
-    uint16_t type;
-    uint16_t code;
-    double value;
-    //Input to read from
-    FILE *f;
-    f = fopen("/usr/local/src/out_rel_1","rb");
-    
-    if (!f) {
-        fprintf(stderr, "Error reading from %s\n", "/usr/local/src/output.bin"); 
-        return;
-    }
-
-    /* Command buffer */
-    char buf[CMD_BUF_LEN];
-    //struct finput_event ie;
-
-    size_t bytes_read = 0;
-    int new_x, new_y = 0; 
-
-    struct timeval tv_old;
-    struct timeval tv_diff;
-    
-    
-    //reset_injection(f, &tv_old, &old_x, &old_y, &new_x, &new_y);
-    bool is_wait = false; 
-    while (!this->is_stopping)
+    if (get_display_dimensions(&qc, &dim) != 0)
     {
-        if (bytes_read == 0)
-        {   
-            /* Prepares injection by initializing all variables */
-            if(reset_hid_injection(f, &tv_old,&new_x, &new_y) != 0)
-                fprintf(stderr, "[HIDSIM] Error reading template file");
-        }
-
-        bytes_read = fread(&tv, sizeof(tv), 1, f);
-        bytes_read = fread(&type, sizeof(type), 1, f);
-        bytes_read = fread(&code, sizeof(code), 1, f);
-        bytes_read = fread(&value, sizeof(value), 1, f);
-
-        PRINT_DEBUG("[HIDSIM] Value %f\n", value);
-
-        if (type == EV_REL){
-            PRINT_DEBUG("[HIDSIM] EV_REL\n");
-            if (code == REL_X)
-            {   
-                new_x += (int)(value * (1<<15));
-                PRINT_DEBUG("[HIDSIM] X %d\n", new_x);
-                //construct_move_mouse_command(buf, CMD_BUF_LEN, new_x,
-                //old_y , false);
-
-            }
-            if (code == REL_Y)
-            {
-                new_y += (int)(value * (1<<15)); 
-                PRINT_DEBUG("[HIDSIM] Y %d \n", new_y);
-                //construct_move_mouse_command(buf, CMD_BUF_LEN, old_x,
-                //new_y, false);
-            }
-        }
-
-        if (type == EV_KEY){
-            PRINT_DEBUG("[HIDSIM] EV_KEY\n");
-            if(code == BTN_LEFT){
-                construct_button_command(buf, CMD_BUF_LEN, "left", (int)value);
-            }
-            if(code == BTN_MIDDLE){
-                construct_button_command(buf, CMD_BUF_LEN, "middle", (int) value);
-            }
-            if(code == BTN_RIGHT){
-                construct_button_command(buf, CMD_BUF_LEN, "right", (int) value);
-
-            }
-            //PRINT_DEBUG("[HIDSIM] %s \n", buf);
-            this->qc.communicate(buf, NULL);
-        }
-
-        timersub(&tv, &tv_old, &tv_diff);
-
-        PRINT_DEBUG("[HIDSIM] Sleeping %ld.%ld secs \n", tv_diff.tv_sec, tv_diff.tv_usec);
-
-        if (tv_diff.tv_sec > 0)
-        {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld secs \n", tv_diff.tv_sec);
-            sleep(tv_diff.tv_sec);
-            is_wait = true;
-        }
-        
-        if (tv_diff.tv_usec > 0)
-        {
-            //PRINT_DEBUG("[HIDSIM] Sleeping %ld usecs\n", tv_diff.tv_usec);
-            usleep(tv_diff.tv_usec);
-            is_wait = true;
-        }
-
-        if (is_wait && tv_diff.tv_usec > 5000){
-            PRINT_DEBUG("[HIDSIM] %s \n", buf);
-            construct_move_mouse_command(buf, CMD_BUF_LEN, new_x, new_y, false);
-            this->qc.communicate(buf, NULL);
-            is_wait = false; 
-        }
-
-        tv_old.tv_sec = tv.tv_sec;
-        tv_old.tv_usec = tv.tv_usec;
+        fprintf(stderr, "[HIDSIM] Error getting display dimensions. Using default values\n");
     }
-}
+  
+    FILE *f = fopen(template_path,"rb");
 
-/* Infers socket path from drakvuf's actual domID */
-void hidsim::construct_sock_path(drakvuf_t drakvuf){
-    
-    /* Retrieves domid as string */
-    char domid[0x20];
-    sprintf(domid, "%d", drakvuf_get_dom_id(drakvuf));    
-    
-    /* Constructs filepath to QMP Unix domain socket */
-    this->sock_path = (char*) malloc(sizeof(char) * (strlen(SOCK_STUB) + strlen(domid)));
-    strcpy(this->sock_path, SOCK_STUB);
-    strcpy(this->sock_path + strlen(SOCK_STUB), domid);
+    if (!f) {
+        fprintf(stderr, "Error reading from %s\n", template_path);
+        return NULL;
+    }
+
+    if(read_header(f) != 0){
+        fprintf(stderr, "Not a valid HID template file. Stopping");
+        return NULL;
+    }
+
+    run_injection(&qc, &dim, f);
+
+    /* Stop and clean up */
+    qmp_close_conn(&qc);
+    fclose(f);
+
+    return NULL; 
 }
 
 hidsim::hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output)
 {
     PRINT_DEBUG("[HIDSIM] Starting plugin\n");
 
+    /* Copies template path */
     if (config->template_fp)
     {
         this->template_path = (char *)malloc(sizeof(char) * strlen(config->template_fp));
@@ -608,47 +419,56 @@ hidsim::hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t o
     }
 
     /* Constructs path to Unix domain socket of Xen guest under investigation */
-    this->construct_sock_path(drakvuf);
+    this->sock_path = construct_sock_path(drakvuf);
     
-    /* Initializes connection */
-    int ret = this->qc.init_conn_unix_sock(this->sock_path);
-    PRINT_DEBUG("[HIDSIM] Connecting to %s\n", this->sock_path);
-
-    if (ret < 0)
-    {
-        fprintf(stderr, "[HIDSIM] Could not connect to Unix Domain Socket %s.\n", this->sock_path);
-        return;
-    }
-
     /* Retrieves display dimensions for coordination of mouse movements */
-    if (this->get_display_dimensions(&(this->dim)) != 0)
-    {
-        fprintf(stderr, "[HIDSIM] Error getting display dimensions. Using default values\n");
-    }
+    //
+
+    
+    char **paths = (char**)malloc(sizeof(char*) * 2); 
+    paths[0] = this->sock_path;
+    paths[1] = this->template_path; 
 
     /* Starts worker thread */
-    this->t = new std::thread(&hidsim::hid_injector_from_file, this, drakvuf);
+    this->t = (pthread_t*) malloc(sizeof(pthread_t));
+    if (pthread_create(this->t, NULL, inject_from_file, (void *) paths))
+    {
+        fprintf(stderr, "Error creating thread\n");
+        return;
+    }
 }
 
 hidsim::~hidsim()
 {
-    if (this->t != NULL || !this->is_stopping)
+    if (this->t != NULL || !sis_stopping)
     {
         this->stop();
     }
-    free(this->template_path);
-    free(this->sock_path);
+
+    if (this->template_path)
+        free(this->template_path);
+    
+    if (this->sock_path)
+        free(this->sock_path);
 };
 
 bool hidsim::stop()
 {
     PRINT_DEBUG("[HIDSIM] Stopping thread\n");
-    this->is_stopping = true;
+    
+    this->m_is_stopping = true; 
+    sis_stopping = 1; 
 
     if (this->t != NULL)
     {
-        this->t->join();
-        this->t = NULL;
+        if (pthread_join(*(this->t), NULL))
+        {
+
+            fprintf(stderr, "Error joining thread\n");
+            return false;
+        }
+        //free(this->t); 
+        
         PRINT_DEBUG("[HIDSIM] Successfully joined thread \n");
     }
     return true;
