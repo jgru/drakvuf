@@ -3,9 +3,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
-
+//#include "../plugins.h"
 #include "qmp_connection.h"
-#include "plugins/plugins_ex.h"
+
 
 /* Takes a caller allocated QMPConnection strcut and initializes connection */
 int qmp_init_conn(qmp_connection *qc,  const char *path){
@@ -69,7 +69,6 @@ int qmp_init_conn(qmp_connection *qc,  const char *path){
     }
 
     qc->is_connected = true;
-    PRINT_DEBUG("[QMP_CONNECTION] Connected to Unix Domain Socket %s.\n", path);
 
     return 0;
 }

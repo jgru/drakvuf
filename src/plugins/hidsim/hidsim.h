@@ -109,21 +109,13 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include "../plugins.h"
-#include "qmp_connection.h"
+#include "hid_injection.h"
 
 #define SOCK_STUB "/run/xen/qmp-libxl-"
 
 struct hidsim_config
 {
     const char* template_fp;
-};
-
-struct dimensions
-{
-    int width;      // display width
-    int height;     // display height
-    float dx;       // one pixel equivalent on x-axis
-    float dy;       // one pixel equivalent on y-axis
 };
 
 class hidsim : public plugin
@@ -133,14 +125,14 @@ public:
    // static bool is_stopping;
     void start();
     bool stop() override;
-    hidsim(drakvuf_t drakvuf, const hidsim_config* config, output_format_t output);
+    hidsim(drakvuf_t drakvuf, const hidsim_config* config);
     ~hidsim();
 
 private:
-    qmp_connection* qc;
-    pthread_t* t;  
-    char* sock_path;
-    char* template_path; 
+    pthread_t t; 
+    t_args ta;  
+    std::string sock_path;
+    std::string template_path; 
 };
 
 #endif

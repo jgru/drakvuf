@@ -5,8 +5,6 @@
 #include <json-c/json.h>
 #include <json-c/json_object.h>
 #include <stdbool.h>
-#include "plugins/private.h"
-#include "plugins/plugins_ex.h"
 
 #define EXEC_QMP_CAPABILITIES "{ \"execute\": \"qmp_capabilities\" }"
 #define QMP_SUCCESS "{\"return\": {}}\r\n"
@@ -32,7 +30,7 @@ int qmp_init_conn(qmp_connection *qc,  char const *path);
 int init_conn_tcp_sock(qmp_connection *qc, char const *path);
 
 /* Sends the given data to the QMPConnection */
-int qmp_communicate_json(qmp_connection *qc, const json_object *in, json_object **out);
+int qmp_communicate_json(qmp_connection *qc, json_object *in, json_object **out);
 
 /* Sends the given data to the QMPConnection */
 int qmp_communicate(qmp_connection *qc, const char* in, char** out);
