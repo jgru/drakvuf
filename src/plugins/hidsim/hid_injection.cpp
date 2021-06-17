@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>  // usleep
 #include <sys/time.h>
+#include<fcntl.h>
 #include <linux/input.h>
 
 /* Hidsim specific includes */
@@ -301,7 +302,19 @@ void* hid_inject(void* p)
     }
 
     if (template_path){
-        FILE *f = fopen(template_path, "rb");
+        int fd = open(template_path, O_RDONLY);
+
+        if(fd < 0){
+            fprintf(stderr, "[HIDSIM] Error opening file %s\n", template_path);
+            return NULL; 
+        }
+
+        /* Asks for aggressive readahead */
+        if(posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)!=0){
+            fprintf(stderr, "[HIDSIM] Asking for aggressive readahead on FD %d failed. Continuing anyway...\n", fd);
+        }
+
+        FILE *f = fdopen(fd, "rb");
 
         if (!f)
         {
