@@ -122,17 +122,16 @@ class hidsim : public plugin
 {
 
 public:
-   // static bool is_stopping;
     void start();
     bool stop() override;
     hidsim(drakvuf_t drakvuf, const hidsim_config* config);
     ~hidsim();
 
 private:
-    pthread_t t; 
-    t_args ta;  
+    pthread_t t;
+    t_args ta;
     std::string sock_path;
-    std::string template_path; 
+    std::string template_path;
 };
 
 #endif

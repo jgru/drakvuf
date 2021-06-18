@@ -299,6 +299,7 @@ sources += ipt/ipt.h
 endif
 
 if PLUGIN_HIDSIM
+sources += hidsim/keymap_evdev_to_qapi.h
 sources += hidsim/hid_injection.cpp
 sources += hidsim/hid_injection.h
 sources += hidsim/qmp_connection.cpp

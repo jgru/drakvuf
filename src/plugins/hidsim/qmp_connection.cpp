@@ -8,35 +8,39 @@
 
 
 /* Takes a caller allocated QMPConnection strcut and initializes connection */
-int qmp_init_conn(qmp_connection *qc,  const char *path){
-  int ret = -1;
-  
-  /* Creates a socket */
-  qc->fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  
-  if (qc->fd == -1) {
-      fprintf(stderr,"socket: %s\n", strerror(errno));
-      return qc->fd;
-  }
-  qc->sa.sun_family = AF_UNIX; 
+int qmp_init_conn(qmp_connection* qc,  const char* path)
+{
+    int ret = -1;
 
-  /* Check, if path to domain is too long */
-  if((strlen(path) + 1) > sizeof(qc->sa.sun_path)){
-      fprintf(stderr,"path to domain socket exceeds %ld characters\n", sizeof(qc->sa.sun_path) );
-      return qc->fd;
-  } 
+    /* Creates a socket */
+    qc->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
-  /* Sets socket path */
-  strcpy(qc->sa.sun_path, path);
+    if (qc->fd == -1)
+    {
+        fprintf(stderr, "socket: %s\n", strerror(errno));
+        return qc->fd;
+    }
+    qc->sa.sun_family = AF_UNIX;
 
-  /* Initializes connection */
-  ret = connect(qc->fd, (struct sockaddr*)&qc->sa, sizeof(qc->sa));
-  
-  if (ret == -1) {
-    fprintf(stderr,"connect: %s - %s\n", strerror(errno), qc->sa.sun_path);
-    return -1;
-  }
-  
+    /* Check, if path to domain is too long */
+    if ((strlen(path) + 1) > sizeof(qc->sa.sun_path))
+    {
+        fprintf(stderr, "path to domain socket exceeds %ld characters\n", sizeof(qc->sa.sun_path) );
+        return qc->fd;
+    }
+
+    /* Sets socket path */
+    strcpy(qc->sa.sun_path, path);
+
+    /* Initializes connection */
+    ret = connect(qc->fd, (struct sockaddr*) &qc->sa, sizeof(qc->sa));
+
+    if (ret == -1)
+    {
+        fprintf(stderr, "connect: %s - %s\n", strerror(errno), qc->sa.sun_path);
+        return -1;
+    }
+
     /* Reads the capabilities, which are sent by the qmp-server */
     ret = read(qc->fd, qc->buf, sizeof(qc->buf));
 
@@ -89,7 +93,8 @@ int qmp_communicate_json(qmp_connection* qc, struct json_object* in, struct json
 }
 
 /* Sends the given data to the QMPConnection and reads the response */
-int qmp_communicate(qmp_connection* qc, const char* in, char** out){
+int qmp_communicate(qmp_connection* qc, const char* in, char** out)
+{
 
     int ret = write(qc->fd, in, strlen(in));
 
@@ -111,16 +116,17 @@ int qmp_communicate(qmp_connection* qc, const char* in, char** out){
         *out = strdup(qc->buf);
 
     memset(qc->buf, 0, sizeof(qc->buf));
-    
-    return 0; 
+
+    return 0;
 }
 
 /* Clean-up */
-int qmp_close_conn(qmp_connection* qc){
-  close(qc->fd);
+int qmp_close_conn(qmp_connection* qc)
+{
+    close(qc->fd);
 
-  if(qc->capabilities)
-    free(qc->capabilities);
+    if (qc->capabilities)
+        free(qc->capabilities);
 
-  return 0;
+    return 0;
 }

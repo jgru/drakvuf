@@ -20,12 +20,12 @@ typedef struct t_args
     const char* template_path;
     /* Stop condition */
     bool* has_to_stop;
-} t_args; 
+} t_args;
 
 /* Inject random mouse movements */
-void *run_random_injection(void* p);
+void* run_random_injection(void* p);
 
 /* Inject HID events from template file */
-void *hid_inject(void* p);
+void* hid_inject(void* p);
 
 #endif

@@ -1,17 +1,24 @@
 
+#include<fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>  // usleep
-#include <sys/time.h>
-#include<fcntl.h>
-#include <linux/input.h>
 #include <stdbool.h>
+#include <unistd.h>
+#include <linux/input.h>
+#include <sys/time.h>
+
+#include <libdrakvuf/libdrakvuf.h> /* eprint_current_time */
+#include "../private.h" /* PRINT_DEBUG */
 
 /* Hidsim specific includes */
+#include "keymap_evdev_to_qapi.h" /* Mapping evdev->qapi name */
 #include "qmp_connection.h"
 #include "hid_injection.h"
 
+#define DRAK_MAGIC_NUMBER 0xc4d2c1cb
+#define DRAK_MAGIC_STR 0x4b415244
 #define CMD_BUF_LEN 0x400
+#define TIME_BIN 50
 
 struct dimensions
 {
@@ -20,6 +27,10 @@ struct dimensions
     float dx;       // one pixel equivalent on x-axis
     float dy;       // one pixel equivalent on y-axis
 };
+
+/* Keep track of the current cursor position */
+int new_x = 1 << 14;
+int new_y = 1 << 14;
 
 int dump_screen(qmp_connection* qc, const char* path)
 {
@@ -82,52 +93,77 @@ int get_display_dimensions(qmp_connection* qc, struct dimensions* dims)
     return ret;
 }
 
-/* Constructs JSON string for sending a button press or release */
-void construct_button_command(char* buf, int len, const char* btn, int is_down)
+/* Parses header of HID-template-file */
+int read_header(FILE* f)
 {
-    const char* type = is_down ? "true" : "false";
-    snprintf(buf, len, 
-    "{ \"execute\": \"input-send-event\" , \"arguments\": { \"events\": [ \
-    { \"type\": \"btn\" , \"data\" : { \"down\": %s, \"button\": \"%s\" } }\
-     ] } }", type, btn);
+    uint32_t magic, drak, version;
+    int nr = 0;
+
+    nr += fread(&magic, sizeof(magic), 1, f);
+    nr += fread(&drak, sizeof(drak), 1, f);
+    nr += fread(&version, sizeof(version), 1, f);
+    if (nr < 3)
+    {
+        fprintf(stderr, "[HIDSIM] Generoc error reading file header of HID-template\n");
+        return 1;
+    }
+
+    if (magic != DRAK_MAGIC_NUMBER || drak != DRAK_MAGIC_STR)
+    {
+        fprintf(stderr, "[HIDSIM] Error parsing header of HID-template\n");
+        return 1;
+    }
+
+    return 0;
 }
 
-/* Constructs JSON string to intruct a mouse movement */
-void construct_move_mouse_command(char* buf, int len, int x, int y, bool is_rel)
+/* Constructs event-string to intruct a mouse movement */
+void construct_move_mouse_event(char* buf, int len, int x, int y, bool is_rel)
 {
     const char* type = is_rel ? "rel" : "abs";
-    snprintf(buf, len, "{\"execute\": \"input-send-event\" , \"arguments\": \
-    {\"events\": [{\"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": \
-    %d }}, {\"type\": \"%s\", \"data\": { \"axis\": \"y\", \"value\": %d }}]}}",
+    snprintf(buf + strlen(buf), len - strlen(buf), " { \"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": \
+    %d } }, {\"type\": \"%s\", \"data\": { \"axis\": \"y\", \"value\": %d } }",
         type, x, type, y);
 }
 
-/* Constructs JSON string to send a key tap of 100ms */
-void construct_key_tap(char* buf, int len, int* keys, size_t n)
-{   
-    char* cur = buf; 
-    cur += snprintf(buf, len, "%s", "{\"execute\": \"send-key\" , \"arguments\": {\"keys\": [ ");
-
-    for(size_t i = 0; i<n; i++){
-        cur += snprintf(cur, len - strlen(cur), " { \"type\": \"number\", \"data\": %d }%c ", keys[i], i < n-1 ? ',' : ' ');
-    }
-    snprintf(cur, len - strlen(cur), "%s", "] } }");
+/* Constructs event-string for sending a button press or release */
+void construct_button_event(char* buf, int len, const char* btn, int is_down, bool is_append)
+{
+    const char* type = is_down ? "true" : "false";
+    snprintf(buf + strlen(buf), len + strlen(buf),
+        " { \"type\": \"btn\" , \"data\" : { \"down\": %s, \"button\": \"%s\" } } %c",
+        type, btn, is_append ? ',' : ' ');
 }
 
-/* Constructs JSON string to send key down or up-command */
-void construct_key_press(char* buf, int len, int* keys, bool* states, size_t n)
-{   
-    char* cur = buf; 
-    cur += snprintf(buf, len, "%s", "{\"execute\": \"input-send-event\" , \"arguments\": {\"events\": [ ");
-    
+/* Constructs event-string to send key down or up-command */
+void construct_key_event(char* buf, int len, const unsigned int key, bool is_down, bool is_append)
+{
+    /*
+     * For some reason sending QKeyCodes as their numbers does not work reliably.
+     * Therefore it is required to map EvDev codes to the QAPI-names of QKeyCodes,
+     * which QMP understands
+     *
+     */
+    const char* state = is_down ? "true" : "false";
+    const char* qapi_name = NULL;
 
-    for(size_t i = 0; i<n; i++){
-        const char* state = states[i] ? "true" : "false";
-        cur += snprintf(cur, len - strlen(cur), " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"number\", \"data\": %d } } } %c ", 
-        state, keys[i], i < n-1 ? ',' : ' ');
+
+    if (key < name_map_linux_to_qcode_len)
+    {
+        /*
+         * Since raw values do not reliably work in (at least) Windows guests,
+         *convert to qapi-names of QKeyCodes!
+         */
+        qapi_name = name_map_linux_to_qcode[key];
+        snprintf(buf + strlen(buf), len - strlen(buf),
+            " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"qcode\", \"data\": \"%s\" } } } %c ",
+            state, qapi_name, is_append ? ',' : ' ');
     }
-    
-    snprintf(cur, len - strlen(cur), "%s", "] } }");
+    else
+        /* Send raw evdev representation as fallback */
+        snprintf(buf + strlen(buf), len - strlen(buf),
+            " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"number\", \"data\": %d } } } %c ",
+            state, key, is_append ? ',' : ' ');
 }
 
 /* Helper to center cursor */
@@ -137,25 +173,8 @@ void center_cursor(qmp_connection* qc)
     char buf[CMD_BUF_LEN];
 
     /* 2^15 == max, 2^14 == max/2 */
-    construct_move_mouse_command(buf, CMD_BUF_LEN, 1<<14, 1<<14, false);
+    construct_move_mouse_event(buf, CMD_BUF_LEN, 1<<14, 1<<14, false);
     qmp_communicate(qc, buf, NULL);
-}
-
-int read_header(FILE* f)
-{
-    uint32_t magic, drak, version;
-    int nr = 0;
-
-    nr += fread(&magic, sizeof(magic), 1, f);
-    nr += fread(&drak, sizeof(drak), 1, f);
-    nr += fread(&version, sizeof(version), 1, f);
-
-    if (nr < 3)
-    {
-        fprintf(stderr, "[HIDSIM] Error reading file header of HID-template");
-        return 1;
-    }
-    return 0;
 }
 
 int reset_hid_injection(qmp_connection* qc, FILE* f, struct timeval* tv, int* nx, int* ny)
@@ -172,83 +191,17 @@ int reset_hid_injection(qmp_connection* qc, FILE* f, struct timeval* tv, int* nx
 
     return ret;
 }
-/* Constructs JSON string to intruct a mouse movement */
-void construct_move_mouse_event(char* buf, int len, int x, int y, bool is_rel)
+/* Processes evdev-events, which encode keypresses/-releases */
+void handle_key_event(input_event* ie, char* buf, size_t n, bool is_append)
 {
-    const char* type = is_rel ? "rel" : "abs";
-    snprintf(buf + strlen(buf), len - strlen(buf), "{\"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": \
-    %d }}, {\"type\": \"%s\", \"data\": { \"axis\": \"y\", \"value\": %d }}",
-        type, x, type, y);
-}
-
-/* Constructs JSON string for sending a button press or release */
-void construct_button_event(char* buf, int len, const char* btn, int is_down, bool is_append)
-{
-    const char* type = is_down ? "true" : "false";
-    snprintf(buf + strlen(buf), len + strlen(buf),
-             " { \"type\": \"btn\" , \"data\" : { \"down\": %s, \"button\": \"%s\" } } %c",
-             type, btn, is_append ? ',' : ' ');
-}
-
-ARRAY MAPPING TODO
-/* Constructs JSON string to send key down or up-command */
-void construct_key_event(char* buf, int len, int key, bool is_down, bool is_append)
-{   
-    /* 
-     * For some reason sending q_key_codes as numbers does not work.
-     * Therefore it is required to map evdev to the qkeycode string representation
-     * which QMP understands
-     * 
-     * String representations are defined here: 
-     * https://github.com/qemu/qemu/blob/18e53dff939898c6dd00d206a3c2f5cd3d6669db/qapi/ui.json#L799
-     */
-    const char *state = is_down ? "true" : "false";
-    bool is_qcode = true; 
-    switch (key)
-    {
-        case KEY_LEFTCTRL:
-            /* code */
-            break;
-        case KEY_RIGHTCTRL:
-            /* code */
-            break;
-        case KEY_LEFTALT:
-            /* code */
-            break;
-        case KEY_RIGHTALT:
-            /* code */
-            break;
-        case KEY_LEFTMETA:
-            /* code */
-            break;
-        case KEY_RIGHTMETA:
-            /* code */
-            break;
-        case KEY_DELETE:
-            /* code */
-            break;
-        default:
-            is_qcode = false; 
-            break;
-    }
-    /* Raw values do not work on windows, therefore convert to QKeyCodes! */
-    if(is_qcode){
-        snprintf(buf + strlen(buf), len - strlen(buf), " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"qcode\", \"data\": \"%s\" } } } %c ",
-                 state, "ctrl", is_append ? ',' : ' ');
-    }
-    else
-        snprintf(buf + strlen(buf), len - strlen(buf), " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"number\", \"data\": %d } } } %c ",
-                 state, key, is_append ? ',' : ' ');
-        
-}
-
-void handle_key_event(input_event* ie, char* buf, size_t n, bool is_append){
     /* Ignores value 2 -> key still pressed */
-    if(ie->value == 0  || ie->value == 1)
-        construct_key_event(buf, n, ie->code, ie->value, is_append); 
+    if (ie->value == 0  || ie->value == 1)
+        construct_key_event(buf, n, ie->code, (const unsigned int) ie->value, is_append);
 }
 
-void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append){
+/* Processes evdev-events, which encode mouse button presses/releases */
+void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append)
+{
     if (ie->code == BTN_LEFT)
     {
         construct_button_event(buf, n, "left", ie->value, is_append);
@@ -263,9 +216,7 @@ void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append){
     }
 }
 
-static int new_x = 1 << 14;
-static int new_y = 1 << 14;
-
+/* Processes evdev-events, which encode mouse movements */
 void handle_move_event(input_event* ie, char* buf, size_t n, int* nx, int* ny, bool is_append)
 {
     if (ie->code == REL_X)
@@ -276,23 +227,19 @@ void handle_move_event(input_event* ie, char* buf, size_t n, int* nx, int* ny, b
     {
         *ny += ie->value;
     }
-    //fprintf(stderr, "%d, %d\n", *new_x, *new_y);
-
-    /* 
+    /*
      * For mouse movements only coords have to be updated,
-     * when appending is requested 
+     * when appending is requested
      */
     if (!is_append)
         construct_move_mouse_event(buf, n, *nx, *ny, false);
 }
 
-
 void handle_event(input_event* ie, char* buf, size_t n, bool is_append)
 {
-    
-    /* Handles move events */
+    /* Handles mouse move events */
     if (ie->type == EV_REL)
-    {   
+    {
         /* Converts to absolute coordinates */
         handle_move_event(ie, buf, n, &new_x, &new_y, is_append);
 
@@ -307,94 +254,8 @@ void handle_event(input_event* ie, char* buf, size_t n, bool is_append)
     }
 }
 
-int run_template_injection_bak(qmp_connection* qc, FILE* f, bool* has_to_stop)
-{
-    /* Command buffer */
-    char buf[CMD_BUF_LEN];
-    struct input_event ie;
-
-    size_t bytes_read = 0;
-    int nx, ny = 0;
-
-    struct timeval tv_old;
-    struct timeval tv_diff;
-    struct timeval tv_curr;
-    struct timeval tv_last_qmp;
-    struct timeval tv_last_qmp_diff;
-    bool is_wait = false;
-    
-    while (!*has_to_stop)
-    {
-        if (bytes_read == 0)
-        {
-            /* Prepares injection by initializing all variables */
-            if (reset_hid_injection(qc, f, &tv_old, &nx, &ny) != 0)
-                fprintf(stderr, "[HIDSIM] Error resetting HID injection");
-        }
-
-        bytes_read = fread(&ie, sizeof(ie), 1, f);
-        timersub(&ie.time, &tv_old, &tv_diff);
-
-        if (tv_diff.tv_sec > 0)
-        {
-            sleep(tv_diff.tv_sec);
-            is_wait = true;
-        }
-
-        if (tv_diff.tv_usec > 0)
-        {
-            usleep(tv_diff.tv_usec);
-            is_wait = true;
-        }
-
-        /* Handles move events */
-        if (ie.type == EV_REL)
-        {
-            if (ie.code == REL_X)
-            {
-                nx += ie.value;
-            }
-            if (ie.code == REL_Y)
-            {
-                ny += ie.value;
-            }
-
-            /* Throttles the sending of QMP commands */
-            if (is_wait)
-            {
-                construct_move_mouse_command(buf, CMD_BUF_LEN, nx, ny, false);
-                qmp_communicate(qc, buf, NULL);
-                gettimeofday(&tv_last_qmp, NULL);
-                is_wait = false;
-            }
-        }
-
-        /* Handles click events */
-        if (ie.type == EV_KEY)
-        {
-            if (ie.code < 0x100)
-                //handle_key_event(&ie, buf, CMD_BUF_LEN);
-                ;
-
-            if (ie.code > 255 && ie.code < 0x120)
-                //handle_btn_event(&ie, buf, CMD_BUF_LEN);
-                ;
-            qmp_communicate(qc, buf, NULL);
-            gettimeofday(&tv_last_qmp, NULL);
-        }
-
-        gettimeofday(&tv_curr, NULL);
-        timersub(&tv_curr, &tv_last_qmp, &tv_last_qmp_diff);
-
-        tv_old.tv_sec = ie.time.tv_sec;
-        tv_old.tv_usec = ie.time.tv_usec;
-    }
-
-    return 0;
-}
-
 int run_template_injection(qmp_connection* qc, FILE* f, bool* has_to_stop)
-{   
+{
     fprintf(stderr, "[HIDSIM] running template injection\n");
     /* Command buffer */
     char cmd[CMD_BUF_LEN];
@@ -402,103 +263,96 @@ int run_template_injection(qmp_connection* qc, FILE* f, bool* has_to_stop)
     struct input_event ie_next, ie_cur;
 
     size_t nr = 0;
-    //int new_x, new_y = 0;
 
     struct timeval tv_old;
     struct timeval tv_diff;
 
-    
-/* First event */
-start:
-    /* Prepares injection by initializing all variables */
-    if (reset_hid_injection(qc, f, &tv_old, &new_x, &new_y) != 0)
-    {
-        fprintf(stderr, "[HIDSIM] Error resetting HID injection");
-    }
+    long int sleep = 0;
+    bool was_last = true;
+
+    /* Reads first event */
     nr = fread(&ie_cur, sizeof(ie_cur), 1, f);
 
-    long int sleep = ie_cur.time.tv_sec * 1000000 * ie_cur.time.tv_usec;
+    /* Waits until first event should be injected */
+    sleep = ie_cur.time.tv_sec * 1000000 * ie_cur.time.tv_usec;
     usleep(sleep);
 
     while (!*has_to_stop)
     {
-        /* Read follow up event */
-        nr = fread(&ie_next, sizeof(ie_next), 1, f);
-        
-        timersub(&ie_next.time, &ie_cur.time, &tv_diff);
-        sleep = tv_diff.tv_sec * 1000000 + tv_diff.tv_usec; 
-        
-
-        if ( sleep > 50)
+        /* Handles the special case of the first event */
+        if (was_last)
         {
-            /* Sends command buffer */ 
+            /* Prepares injection by initializing all variables */
+            if (reset_hid_injection(qc, f, &tv_old, &new_x, &new_y) != 0)
+            {
+                fprintf(stderr, "[HIDSIM] Error resetting HID injection");
+                return 1;
+            }
+            was_last = false;
+        }
+
+        /* Reads the follow-up event */
+        nr = fread(&ie_next, sizeof(ie_next), 1, f);
+
+        if (nr == 0) /* EOF was reached */
+        {
+            /* Iteration deals with last event in template */
+            was_last = true;
+            /* Resets time for the repeat */
+            timerclear(&ie_cur.time);
+            /* Ensures injection of pending events */
+            sleep = TIME_BIN +1;
+        }
+        else
+        {
+            timersub(&ie_next.time, &ie_cur.time, &tv_diff);
+            sleep = tv_diff.tv_sec * 1000000 + tv_diff.tv_usec;
+        }
+        /*
+         * Throttles event injection, by combing all events within a timeframe of 50 usecs
+         * This performs actually a binning with bin size of 50 usecs
+         */
+        if ( sleep > TIME_BIN)
+        {
+            /* Constructs event-string corresponding to evdev-event in question */
             handle_event(&ie_cur, buf, CMD_BUF_LEN, false);
-            
+
+            /* Constructs execute-buffer containing various events */
             snprintf(cmd, CMD_BUF_LEN, "%s", "{ \"execute\": \"input-send-event\" , \"arguments\": { \"events\": [");
             snprintf(cmd + strlen(cmd), CMD_BUF_LEN - strlen(cmd), "%s", buf);
             snprintf(cmd + strlen(cmd), CMD_BUF_LEN - strlen(cmd), "%s", "] } }");
-            
+
+            /* Sends command buffer */
             qmp_communicate(qc, cmd, NULL);
-            fprintf(stderr, "[HIDSIM] %s\n", cmd); 
+            PRINT_DEBUG("[HIDSIM] %s\n", cmd);
+
+            /* Resets event buffer */
             buf[0] = '\0';
-            fprintf(stderr, "[HIDSIM] sleeping %ld\n", sleep); 
-            usleep(sleep);
         }
-        else 
+        else
         {
-            /* Append to buffer */
+            /* Converts evdev-event to qmp-string and appends it to buffer */
             handle_event(&ie_cur, buf, CMD_BUF_LEN, true);
         }
-
-        ie_cur = ie_next; 
-        
-        if (nr == 0)
+        /* Omits sleeping after injection of last event */
+        if (!was_last)
         {
-            goto start; 
+            usleep(sleep);
+            ie_cur = ie_next;
         }
-
     }
-
     return 0;
 }
-void* run_key_injection(qmp_connection* qc, bool* has_to_stop){
-    fprintf(stderr, "[HIDSIM] running key injection\n");
 
-    /* Declares points in time */
-    struct timeval t1;
-    gettimeofday(&t1, NULL);
-
-    /* Command buffer */
-    char buf[CMD_BUF_LEN];
-    int n = 2; 
-    bool states_d[] = {true, true}; 
-    bool states_u[] = {false, false};
-    int keys[] = {KEY_LEFTSHIFT, KEY_A};
-    int sign = 0x1;
-    /* Loops, until stopped */
-    while (!*has_to_stop)
-    {
-        //construct_key_tap(buf, CMD_BUF_LEN, keys, 2);
-        construct_key_press(buf, CMD_BUF_LEN, keys, sign == 1?states_d:states_u, n);
-        fprintf(stderr, "[HIDSIM] %s\n", buf);
-        qmp_communicate(qc, buf, NULL); 
-        fprintf(stderr, "[HIDSIM] Sent key press\n");
-        //usleep(100);
-        //construct_key_press(buf, CMD_BUF_LEN, keys, states_u, n);
-        
-        sign = ~sign + 1;
-        usleep(100000);
-    }
-    return NULL;
-}
-void* run_random_injection(qmp_connection* qc, bool* has_to_stop)
+int run_random_injection(qmp_connection* qc, bool* has_to_stop)
 {
     struct dimensions dim;
-    get_display_dimensions(qc, &dim);
+    if (get_display_dimensions(qc, &dim) != 0)
+        return -1;
 
     /* Converts interval to usecs */
     int uinterval = RAND_INTERVAL * 1000;
-    
+
     /* Declares points in time */
     struct timeval t1, t2, tdiff;
 
@@ -511,21 +365,30 @@ void* run_random_injection(qmp_connection* qc, bool* has_to_stop)
     /* Used for inverting mouse movement */
     int sign = 0x1;
 
-    long int elapsed = 0; 
-    
+    long int elapsed = 0;
+
     /* Loops, until stopped */
     while (!*has_to_stop)
     {
         gettimeofday(&t2, NULL);
         timersub(&t2, &t1, &tdiff);
         elapsed = tdiff.tv_sec * 1000000 + tdiff.tv_usec;
-        
+
         if (elapsed > uinterval)
         {
-            construct_move_mouse_command(buf, CMD_BUF_LEN, (int)((1<<14) + (128 * dim.dx * sign)),
-                (int)((1<<14) + (128 *  dim.dy * sign)), false);
+            snprintf(buf, CMD_BUF_LEN, "%s", "{ \"execute\": \"input-send-event\" , \"arguments\": { \"events\": [");
+
+            new_x = (int)((1<<14) + (128 * dim.dx * sign));
+            new_y = (int)((1<<14) + (128 *  dim.dy * sign));
+
+            construct_move_mouse_event(buf, CMD_BUF_LEN, new_x, new_y, false);
+            snprintf(buf + strlen(buf), CMD_BUF_LEN - strlen(buf), "%s", "] } }");
+
             qmp_communicate(qc, buf, NULL);
+            fprintf(stderr, "[HIDSIM] %s\n", buf);
+
             sign = ~sign + 1;
+            buf[0] = '\0';
             gettimeofday(&t1, NULL);
         }
         else
@@ -534,12 +397,29 @@ void* run_random_injection(qmp_connection* qc, bool* has_to_stop)
             usleep(uinterval - elapsed);
         }
     }
-    return NULL;
+    return 0;
+}
+
+int cleanup_template(qmp_connection* qc, int fd, FILE* f)
+{
+    int ret = 0;
+
+    if (qc)
+        if ((ret = qmp_close_conn(qc)) != 0)
+            fprintf(stderr, "[HIDSIM] Error closing QMP socket %s\n", qc->sa.sun_path);
+    if (f)
+        if ((ret = fclose(f)) != 0)
+            fprintf(stderr, "[HIDSIM] Error closing %p", f);
+    if (fd >= 0)
+        if ((ret = close(fd)) != 0)
+            fprintf(stderr, "[HIDSIM] Error closing %d\n", fd);
+
+    return ret;
 }
 
 /* Worker thread function */
 void* hid_inject(void* p)
-{   
+{
 
     /* Passed parameters */
     struct t_args* ta = (struct t_args*) p;
@@ -549,6 +429,9 @@ void* hid_inject(void* p)
 
     /* Initializes qmp connection */
     qmp_connection qc;
+    int sc = 0;
+    int fd = -1;
+    FILE* f = NULL;
 
     if (qmp_init_conn(&qc, sock_path) < 0)
     {
@@ -556,46 +439,50 @@ void* hid_inject(void* p)
         return NULL;
     }
 
-    if (template_path){
-        int fd = open(template_path, O_RDONLY);
+    if (template_path)
+    {
+        fd = open(template_path, O_RDONLY);
 
-        if(fd < 0){
+        if (fd < 0)
+        {
             fprintf(stderr, "[HIDSIM] Error opening file %s\n", template_path);
-            return NULL; 
+            cleanup_template(&qc, fd, NULL);
+            return NULL;
         }
 
         /* Asks for aggressive readahead */
-        if(posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)!=0){
+        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)!=0)
+        {
             fprintf(stderr, "[HIDSIM] Asking for aggressive readahead on FD %d failed. Continuing anyway...\n", fd);
         }
 
-        FILE *f = fdopen(fd, "rb");
+        f = fdopen(fd, "rb");
 
         if (!f)
         {
             fprintf(stderr, "[HIDSIM] Error reading from %s\n", template_path);
+            cleanup_template(&qc, fd, NULL);
             return NULL;
         }
 
         if (read_header(f) != 0)
         {
-            fprintf(stderr, "[HIDSIM] Not a valid HID template file. Stopping");
+            fprintf(stderr, "[HIDSIM] Not a valid HID template file. Stopping\n");
+            cleanup_template(&qc, fd, f);
             return NULL;
         }
 
         /* Performs actual injection */
-        run_template_injection(&qc, f, has_to_stop);
-        
-        fclose(f);
+        sc = run_template_injection(&qc, f, has_to_stop);
     }
     else
     {
-        //run_random_injection(&qc, has_to_stop);
-        run_key_injection(&qc, has_to_stop);
+        sc = run_random_injection(&qc, has_to_stop);
     }
+    if (sc != 0)
+        fprintf(stderr, "[HIDSIM] Error performing HID injection\n");
 
-    /* Stop and clean up */
-    qmp_close_conn(&qc);
+    cleanup_template(&qc, fd, f);
 
     return NULL;
 }

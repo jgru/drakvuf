@@ -102,13 +102,14 @@
  *                                                                         *
  ***************************************************************************/
 
-#include <libdrakvuf/libdrakvuf.h>
-#include "../private.h" //  PRINT_DEBUG
+#include <libdrakvuf/libdrakvuf.h> /* eprint_current_time */
+#include "../private.h" /* PRINT_DEBUG */
 #include "hidsim.h"
 
 /* Infers socket path from drakvuf's actual domID */
-std::string construct_sock_path(drakvuf_t drakvuf){
-    
+std::string construct_sock_path(drakvuf_t drakvuf)
+{
+
     /* Retrieves domid as string */
     std::string sock_path(SOCK_STUB);
     sock_path.append(std::to_string(drakvuf_get_dom_id(drakvuf)));
@@ -120,29 +121,29 @@ hidsim::hidsim(drakvuf_t drakvuf, const hidsim_config* config)
 
     if (config->template_fp)
     {
-        this->template_path.assign(config->template_fp); 
+        this->template_path.assign(config->template_fp);
         PRINT_DEBUG("[HIDSIM] Using template file: %s\n", this->template_path.c_str());
     }
 
     /* Constructs path to Unix domain socket of Xen guest under investigation */
-    this->sock_path = construct_sock_path(drakvuf);   
+    this->sock_path = construct_sock_path(drakvuf);
     PRINT_DEBUG("[HIDSIM] Using Unix domain socket: %s\n", this->sock_path.c_str());
-    
+
     /* Populates thread args */
     this->ta.socket_path = this->sock_path.c_str();
-    this->ta.template_path = this->template_path.length() > 0 ? 
-                             this->template_path.c_str() : NULL;
+    this->ta.template_path = this->template_path.length() > 0 ?
+        this->template_path.c_str() : NULL;
     this->ta.has_to_stop = &(this->m_is_stopping);
-    this->m_is_stopping = false;  
+    this->m_is_stopping = false;
 
     /* Starts worker thread */
-    if (pthread_create(&this->t, NULL, hid_inject, (void *) &ta))
+    if (pthread_create(&this->t, NULL, hid_inject, (void*) &ta))
     {
         fprintf(stderr, "[HIDSIM] Error creating thread\n");
         this->m_is_stopping = true;
         return;
     }
-    PRINT_DEBUG("[HIDSIM] HID injection startet\n");
+    PRINT_DEBUG("[HIDSIM] HID injection started\n");
 }
 
 hidsim::~hidsim()
@@ -156,7 +157,7 @@ hidsim::~hidsim()
 bool hidsim::stop()
 {
     PRINT_DEBUG("[HIDSIM] Stopping HID injection\n");
-    
+
     if (!this->m_is_stopping)
     {
         this->m_is_stopping = true;
