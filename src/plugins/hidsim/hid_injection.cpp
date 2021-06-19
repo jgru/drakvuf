@@ -32,7 +32,7 @@ struct dimensions
 int new_x = 1 << 14;
 int new_y = 1 << 14;
 
-int dump_screen(qmp_connection* qc, const char* path)
+static int dump_screen(qmp_connection* qc, const char* path)
 {
     char cmd[0x200];
     snprintf(cmd, 0x200,
@@ -50,13 +50,13 @@ int dump_screen(qmp_connection* qc, const char* path)
 }
 
 /* For absolute pointing devices 2^15 is used to specify maximum */
-float calculate_pixel_unit(int u)
+static float calculate_pixel_unit(int u)
 {
     return (float)(1<<15)/u;
 }
 
 /* Retrieves display dimensions for coordination of mouse movements */
-int get_display_dimensions(qmp_connection* qc, struct dimensions* dims)
+static int get_display_dimensions(qmp_connection* qc, struct dimensions* dims)
 {
     const char* tmp_path = "/tmp/tmp.ppm";
 
@@ -94,7 +94,7 @@ int get_display_dimensions(qmp_connection* qc, struct dimensions* dims)
 }
 
 /* Parses header of HID-template-file */
-int read_header(FILE* f)
+static int read_header(FILE* f)
 {
     uint32_t magic, drak, version;
     int nr = 0;
@@ -118,7 +118,7 @@ int read_header(FILE* f)
 }
 
 /* Constructs event-string to intruct a mouse movement */
-void construct_move_mouse_event(char* buf, int len, int x, int y, bool is_rel)
+static void construct_move_mouse_event(char* buf, int len, int x, int y, bool is_rel)
 {
     const char* type = is_rel ? "rel" : "abs";
     snprintf(buf + strlen(buf), len - strlen(buf), " { \"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": \
@@ -127,7 +127,7 @@ void construct_move_mouse_event(char* buf, int len, int x, int y, bool is_rel)
 }
 
 /* Constructs event-string for sending a button press or release */
-void construct_button_event(char* buf, int len, const char* btn, int is_down, bool is_append)
+static void construct_button_event(char* buf, int len, const char* btn, int is_down, bool is_append)
 {
     const char* type = is_down ? "true" : "false";
     snprintf(buf + strlen(buf), len + strlen(buf),
@@ -136,7 +136,7 @@ void construct_button_event(char* buf, int len, const char* btn, int is_down, bo
 }
 
 /* Constructs event-string to send key down or up-command */
-void construct_key_event(char* buf, int len, const unsigned int key, bool is_down, bool is_append)
+static void construct_key_event(char* buf, int len, const unsigned int key, bool is_down, bool is_append)
 {
     /*
      * For some reason sending QKeyCodes as their numbers does not work reliably.
@@ -167,7 +167,7 @@ void construct_key_event(char* buf, int len, const unsigned int key, bool is_dow
 }
 
 /* Helper to center cursor */
-void center_cursor(qmp_connection* qc)
+static void center_cursor(qmp_connection* qc)
 {
     /* Command buffer */
     char buf[CMD_BUF_LEN];
@@ -177,7 +177,7 @@ void center_cursor(qmp_connection* qc)
     qmp_communicate(qc, buf, NULL);
 }
 
-int reset_hid_injection(qmp_connection* qc, FILE* f, struct timeval* tv, int* nx, int* ny)
+static int reset_hid_injection(qmp_connection* qc, FILE* f, struct timeval* tv, int* nx, int* ny)
 {
     /* Jumps to the beginning of the HID data */
     int ret = fseek(f, HEADER_LEN, SEEK_SET);
@@ -192,7 +192,7 @@ int reset_hid_injection(qmp_connection* qc, FILE* f, struct timeval* tv, int* nx
     return ret;
 }
 /* Processes evdev-events, which encode keypresses/-releases */
-void handle_key_event(input_event* ie, char* buf, size_t n, bool is_append)
+static void handle_key_event(input_event* ie, char* buf, size_t n, bool is_append)
 {
     /* Ignores value 2 -> key still pressed */
     if (ie->value == 0  || ie->value == 1)
@@ -200,7 +200,7 @@ void handle_key_event(input_event* ie, char* buf, size_t n, bool is_append)
 }
 
 /* Processes evdev-events, which encode mouse button presses/releases */
-void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append)
+static void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append)
 {
     if (ie->code == BTN_LEFT)
     {
@@ -217,7 +217,7 @@ void handle_btn_event(input_event* ie, char* buf, size_t n, bool is_append)
 }
 
 /* Processes evdev-events, which encode mouse movements */
-void handle_move_event(input_event* ie, char* buf, size_t n, int* nx, int* ny, bool is_append)
+static void handle_move_event(input_event* ie, char* buf, size_t n, int* nx, int* ny, bool is_append)
 {
     if (ie->code == REL_X)
     {
@@ -235,7 +235,7 @@ void handle_move_event(input_event* ie, char* buf, size_t n, int* nx, int* ny, b
         construct_move_mouse_event(buf, n, *nx, *ny, false);
 }
 
-void handle_event(input_event* ie, char* buf, size_t n, bool is_append)
+static void handle_event(input_event* ie, char* buf, size_t n, bool is_append)
 {
     /* Handles mouse move events */
     if (ie->type == EV_REL)
@@ -254,7 +254,7 @@ void handle_event(input_event* ie, char* buf, size_t n, bool is_append)
     }
 }
 
-int run_template_injection(qmp_connection* qc, FILE* f, bool* has_to_stop)
+static int run_template_injection(qmp_connection* qc, FILE* f, bool* has_to_stop)
 {
     fprintf(stderr, "[HIDSIM] running template injection\n");
     /* Command buffer */
@@ -344,7 +344,7 @@ int run_template_injection(qmp_connection* qc, FILE* f, bool* has_to_stop)
     return 0;
 }
 
-int run_random_injection(qmp_connection* qc, bool* has_to_stop)
+static int run_random_injection(qmp_connection* qc, bool* has_to_stop)
 {
     struct dimensions dim;
     if (get_display_dimensions(qc, &dim) != 0)
@@ -400,7 +400,7 @@ int run_random_injection(qmp_connection* qc, bool* has_to_stop)
     return 0;
 }
 
-int cleanup_template(qmp_connection* qc, int fd, FILE* f)
+static int hid_cleanup(qmp_connection* qc, int fd, FILE* f)
 {
     int ret = 0;
 
@@ -446,7 +446,7 @@ void* hid_inject(void* p)
         if (fd < 0)
         {
             fprintf(stderr, "[HIDSIM] Error opening file %s\n", template_path);
-            cleanup_template(&qc, fd, NULL);
+            hid_cleanup(&qc, fd, NULL);
             return NULL;
         }
 
@@ -461,14 +461,14 @@ void* hid_inject(void* p)
         if (!f)
         {
             fprintf(stderr, "[HIDSIM] Error reading from %s\n", template_path);
-            cleanup_template(&qc, fd, NULL);
+            hid_cleanup(&qc, fd, NULL);
             return NULL;
         }
 
         if (read_header(f) != 0)
         {
             fprintf(stderr, "[HIDSIM] Not a valid HID template file. Stopping\n");
-            cleanup_template(&qc, fd, f);
+            hid_cleanup(&qc, fd, f);
             return NULL;
         }
 
@@ -482,7 +482,7 @@ void* hid_inject(void* p)
     if (sc != 0)
         fprintf(stderr, "[HIDSIM] Error performing HID injection\n");
 
-    cleanup_template(&qc, fd, f);
+    hid_cleanup(&qc, fd, f);
 
     return NULL;
 }
