@@ -103,6 +103,7 @@
  * This file was created by Jan Gruber.                                    *
  * It is distributed as part of DRAKVUF under the same license             *
  ***************************************************************************/
+
 #include<fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,29 +121,23 @@
 #include "qmp_connection.h"
 #include "hid_injection.h"
 
+/* Drakvuf HID template */
 #define DRAK_MAGIC_NUMBER 0xc4d2c1cb
 #define DRAK_MAGIC_STR 0x4b415244
+#define HEADER_LEN 0xC
+
 #define PPM_MAGIC_NUMBER "P6"
 
 /* Length of the QMP command buffer */
 #define CMD_BUF_LEN 0x400
 
-/* QMP command string templates */
-#define QMP_SEND_INPUT_OPENING "{ \"execute\": \"input-send-event\" , \"arguments\": { \"events\": ["
-#define QMP_MOUSE_MOVE_EVENT_FMT_STR " { \"type\": \"%s\", \"data\" : {\"axis\": \"x\", \"value\": %d } }, {\"type\": \"%s\", \"data\": { \"axis\": \"y\", \"value\": %d } }"
-#define QMP_MOUSE_BTN_EVENT_FMT_STR " { \"type\": \"btn\" , \"data\" : { \"down\": %s, \"button\": \"%s\" } } %c"
-#define QMP_SCREEN_DUMP_FMT_STR "{ \"execute\":\"screendump\", \"arguments\": { \"filename\": \"%s\" } }"
-#define QMP_KEY_PRESS_QAPI_FMT_STR " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"qcode\", \"data\": \"%s\" } } } %c "
-#define QMP_KEY_PRESS_CODE_FMT_STR " { \"type\": \"key\", \"data\" : { \"down\": %s, \"key\": {\"type\": \"number\", \"data\": %d } } } %c "
-#define QMP_SEND_INPUT_CLOSING "] } }"
-
-/* Throttle injection down to 50 microsecs */
-#define TIME_BIN 50
-
 /* QAPI's button values */
 #define L_BTN_STR "left"
 #define M_BTN_STR "middle"
 #define R_BTN_STR "right"
+
+/* Throttle injection down to 50 microsec intervals */
+#define TIME_BIN 50
 
 struct dimensions
 {
@@ -549,7 +544,7 @@ static int run_random_injection(qmp_connection* qc, bool* has_to_stop)
     timeval t;
     gettimeofday(&t, NULL);
     srand(t.tv_sec);
-
+    int s = rand()%512;
     /* Loops, until stopped */
     while (!*has_to_stop)
     {
@@ -565,7 +560,7 @@ static int run_random_injection(qmp_connection* qc, bool* has_to_stop)
          * Here a random number from a gaussian distribution is drawn,
          * so that the velocity of the cursor movements varies
          */
-        time_frame = gaussian_rand(dist * 12, dist * 32);
+        time_frame = gaussian_rand(dist * 12, dist * 24);
 
         /* Reverse negative */
         time_frame = time_frame < dist ? dist + (dist-time_frame) : time_frame;
@@ -577,9 +572,10 @@ static int run_random_injection(qmp_connection* qc, bool* has_to_stop)
         oy = ny;
 
         /* Gaussian distributed waiting between smooth movements */
-        sleep = (int) gaussian_rand(0, 15000);
+        sleep = (int) gaussian_rand(0, 10000);
         if (sleep>0)
             usleep(sleep);
+        s++;
     }
 
     return 0;

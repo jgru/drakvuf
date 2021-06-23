@@ -103,6 +103,7 @@
  * This file was created by Jan Gruber.                                    *
  * It is distributed as part of DRAKVUF under the same license             *
  ***************************************************************************/
+
 #ifndef HID_INJECTION_H
 #define HID_INJECTION_H
 
@@ -111,8 +112,6 @@
 #include <json-c/json_object.h>
 #include <stdbool.h>
 #include "../private.h" //  PRINT_DEBUG
-#define HEADER_LEN 0xC
-
 
 /* Arguments passed to thread-functions */
 typedef struct t_args

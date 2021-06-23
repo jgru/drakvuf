@@ -100,6 +100,8 @@
  * DRAKVUF, and also available from                                        *
  * https://github.com/tklengyel/drakvuf/COPYING)                           *
  *                                                                         *
+ * This file was created by Jan Gruber.                                    *
+ * It is distributed as part of DRAKVUF under the same license             *
  ***************************************************************************/
 
 #include <libdrakvuf/libdrakvuf.h> /* eprint_current_time */
@@ -109,7 +111,6 @@
 /* Infers socket path from drakvuf's actual domID */
 std::string construct_sock_path(drakvuf_t drakvuf)
 {
-
     /* Retrieves domid as string */
     std::string sock_path(SOCK_STUB);
     sock_path.append(std::to_string(drakvuf_get_dom_id(drakvuf)));

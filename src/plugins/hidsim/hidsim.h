@@ -100,6 +100,8 @@
  * DRAKVUF, and also available from                                        *
  * https://github.com/tklengyel/drakvuf/COPYING)                           *
  *                                                                         *
+ * This file was created by Jan Gruber.                                    *
+ * It is distributed as part of DRAKVUF under the same license             *
  ***************************************************************************/
 
 #ifndef HIDSIM_H
@@ -108,6 +110,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdbool.h>
+
 #include "../plugins.h"
 #include "hid_injection.h"
 
